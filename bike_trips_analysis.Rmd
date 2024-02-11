@@ -1,0 +1,169 @@
+---
+title: "Bike Trips Analysis"
+author: "Cody Thomas"
+date: "2024-02-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Cyclistic (not a real company) is interested in designing marketing strategies to better promote converting casual riders into annual members. Annual members are much more profitable compared to casual riders. The main goal of this analysis is to first determine how casual riders use Cyclystic bikes differently compared to the annual members.
+
+In order to help answer this question, public data from Motivate International Inc. was used. Data sets in which the analysis was performed on was Q1 2019 and Q1 2020 bike trip data. These specific data sets were used rather than more recent or full year data sets due to the RAM restrictions of the Cloud Free Posit Cloud account. Adding more data sets or using larger data sets would routinely crash the session.
+
+## Compiling the Data
+
+Between 2019 and 2020, there were changes into the data fields that were tracked for the bike trips. The data wrangling involved 3 phases:
+* Make column names consistent between the 2 data sets
+* Combine the data sets into a single data frame
+* Remove columns that were not consistent between the 2 data sets
+
+# Setting up the environment
+```{r environment}
+install.packages('tidyverse')
+install.packages('lubridate')
+install.packages('ggplot2')
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+# Read in the data and make columns consistent between the data sets
+
+```{r}
+q1_2019 <- read.csv('Divvy_Trips_2019_Q1 - Divvy_Trips_2019_Q1.csv')
+q1_2020 <- read.csv('Divvy_Trips_2020_Q1 - Divvy_Trips_2020_Q1.csv')
+```
+
+The differences between the Q1 2019 data set and Q1 2020 data set are listed below:
+* Q1 2019 data set using different naming for the ride_id, rideable_type, started_at, ended_at, start_station_id, start_station_name, end_station_id, end_station_name, and member_casual columns.
+* The rideable_type column for the Q1 2020 data set only had one unique value while the Q1 2019 data set used the individual bike id. These columns were not useful to the analysis and were later removed from the final working data frame.
+* The Q1 2019 data set included fields for trip duration, gender, and birthyear which were not present in the Q1 2020 data set. The Q1 2020 data set into start/end latitude and longitude data that was not present in the Q1 2019 data set. These fields were removed and not included in the final data analysis.
+* The Q1 2019 data set used strictly integers for the trip_id (ride_id) and bike_id (rideable_type) fields, while the Q1 2020 data set integrated characters and numbers for these fields.
+
+One these inconsistencies were dealt with, the final all_trips data frame was created by combining the rows of each data set.
+
+```{r all_trips}
+q1_2019 <- q1_2019 %>%
+  rename(
+    ride_id = trip_id,
+    rideable_type = bikeid,
+    started_at = start_time,
+    ended_at = end_time,
+    start_station_id = from_station_id,
+    start_station_name = from_station_name,
+    end_station_id = to_station_id,
+    end_station_name = to_station_name,
+    member_casual = usertype
+  )
+
+q1_2019 <- q1_2019 %>%
+  mutate(ride_id = as.character(ride_id),
+         rideable_type = as.character(rideable_type))
+
+all_trips = bind_rows(q1_2019, q1_2020)
+rm(q1_2019, q1_2020)
+
+columns_to_remove = c("tripduration", "gender", "birthyear", "start_lat", "start_lng", "end_lat", "end_lng")
+all_trips <- all_trips %>%
+  select(-all_of(columns_to_remove))
+```
+
+# Cleaning the all_trips data frame
+
+Once the 2019 and 2020 datasets were combined, the data cleaning process invovled dealing with the following inconsistencies.
+
+* The naming of a casual rider or annual member differed between 2019 and 2020. In the 2019 data, annual members were referred to as 'Subscribers' and casual riders were labeled as 'Customer'. In 2020, this changed to 'member' and 'casual'.
+* The starting date was expanded to add fields for year, month, day, and day of the week to allow for better grouping during the data analysis phase.
+* A ride legth column was created to calculate the ride duration in minutes. This would mimic the removed 'tripduration' field from the Q1 2019 data set.
+* 'Bad' data was removed. This included any bike trips that started at company HQ or trips that had a negative ride length.
+
+The final working data frame for the data analysis was assigned to the all_trips_v2 variable.
+
+```{r all_trips_v2}
+all_trips <- all_trips %>%
+  mutate(member_casual = recode(member_casual,
+                                "Subscriber" = "member",
+                                "Customer" = "casual"))
+
+all_trips <- all_trips %>%
+  mutate(date = as_date(started_at),
+         day = format(date, "%d"),
+         month = format(date, "%m"),
+         year = format(date, "%y"),
+         day_of_week = format(date, "%A"),
+         ride_length = as.numeric(difftime(ended_at, started_at, units="mins"))
+  )
+
+all_trips_v2 <- all_trips[(all_trips$start_station_name != "HQ QR" & all_trips$ride_length > 0),]
+```
+
+
+## Data Analysis
+
+The data analysis was focused on the goal of determining how causal riders and annual members differed in how they use the Cyclistic bikes. The analysis looked into how ride length differs between the two groups and how the ride use changes as the week progresses.
+
+First, ride duration summary statistics was calculated for both the whole data set and for the two rider types (annual members or casual riders).
+
+```{r summary}
+summary(all_trips_v2$ride_length)
+
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN=mean)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN=median)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN=max)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN=min)
+```
+
+Annual members take shorter rides compared to the casual riders by a large margin. In addition, casual riders ride length sees large increases near the end of the standard working week (Thursday and Friday).
+
+```{r number_of_rides}
+all_trips_v2$day_of_week <- ordered(all_trips_v2$day_of_week, 
+                                    levels=c("Sunday", "Monday", "Tuesday", "Wednesday", 
+                                             "Thursday", "Friday", "Saturday")
+                                    )
+
+all_trips_v2 %>%
+  group_by(member_casual, day_of_week) %>%
+  summarize(mean(ride_length))
+```
+
+This can also be visualized below.
+
+```{r visualize_average_ride_length}
+all_trips_v2 %>%
+  group_by(member_casual, day_of_week) %>%
+  summarize(number_of_rides = n(),
+            average_duration = mean(ride_length)) %>%
+  ggplot(aes(x=day_of_week, y=average_duration, fill=member_casual)) +
+  geom_col(position='dodge') +
+  labs(title="Average Ride Length by Day of the Week", subtitle="Ridership data from Q1 2019 and Q1 2020",
+       x="Day of the Week", y="Average Ride Length (minutes)", fill="Rider Type") +
+  theme(axis.text.x = element_text(angle=45))
+```
+
+Next looking at the number of rides and how this changes by the week, we see another interesting trend. Annual members take more bike rides Monday - Friday, while casual riders see larger number of rides on weekend days.
+
+
+```{r visualize_number_of_rides}
+all_trips_v2 %>%
+  group_by(member_casual, day_of_week) %>%
+  summarize(number_of_rides = n(),
+            average_duration = mean(ride_length)) %>% # casual riders take more rides on the weekends, members take more rides during the weekdays
+  # visualize
+  ggplot(aes(x=day_of_week, y=number_of_rides, fill=member_casual)) +
+  geom_col(position='dodge') +
+  labs(title="Number of Rides by Day of the Week", subtitle="Ridership data from Q1 2019 and Q1 2020",
+       x="Day of the Week", y="Number of Rides", fill="Rider Type") +
+  theme(axis.text.x = element_text(angle=45))
+```
+
+## Key Insights
+
+* Annual members take much shorter rides on average.
+* Annual members take a majority of their rides on the week days (Monday - Friday).
+* Casual members take much longer rides on average. There is a spike in the average ride length on Thursdays and Fridays.
+* Casual members take a majority of their rides on weekend days (Saturday and Sunday).
